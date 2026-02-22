@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>高尔顿钉板 (Galton Board)：正态分布如何“自然”出现</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#121822; --ink:#e5eef7; --muted:#8fa3b8; --accent:#66c2ff; --peg:#2a3a4e;
+      --ok:#22c55e; --warn:#f59e0b; --danger:#ef4444;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;}
+    body{
+      margin:0; background:radial-gradient(1200px 900px at 70% -10%, #132134 0%, var(--bg) 60%);
+      color:var(--ink); font:16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft Yahei", sans-serif;
+      display:flex; align-items:stretch; justify-content:center;
+    }
+    .wrap{width:min(1100px, 100%); padding:18px; display:grid; gap:16px; grid-template-columns: 1fr;}
+    header{display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
+    h1{font-size:20px; margin:0; letter-spacing:.5px; font-weight:700}
+    .controls{display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; max-width:65%;}
+    .ctrl{background:var(--panel); border:1px solid #1f2a3a; padding:8px 10px; border-radius:14px; display:flex; align-items:center; gap:10px; box-shadow:0 6px 20px rgba(0,0,0,.25); flex:1 1 180px;}
+    .ctrl label{font-size:12px; color:var(--muted); min-width:70px;}
+    .ctrl input[type=range]{width:140px; flex:1;}
+    .ctrl span{min-width:40px; text-align:right;}
+    .btn-group{display:flex; gap:8px; margin-top:10px; width:100%; justify-content:flex-end;}
+    button{background:#1f2a3a; color:var(--ink); border:1px solid #2a3a4e; padding:8px 12px; border-radius:12px; cursor:pointer; transition:.2s; font-weight:600; min-width:70px;}
+    button:hover{transform:translateY(-1px); box-shadow:0 6px 18px rgba(0,0,0,.35)}
+    button.primary{background:linear-gradient(180deg, #3a6cf0, #2c56c7); border-color:#3454c0}
+    button.success{background:linear-gradient(180deg, #1fb66a, #159b56)}
+    .grid{display:grid; grid-template-columns: 2fr 1fr; gap:16px}
+    .card{background:var(--panel); border:1px solid #1f2a3a; border-radius:18px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .card h2{margin:0 0 10px; font-size:14px; color:var(--muted); letter-spacing:.2px}
+    canvas{width:100%; height:auto; background:linear-gradient(180deg,#0e1622 0,#0b111a 40%, #0b0f14 100%); border-radius:14px; display:block}
+    .legend{display:flex; gap:12px; color:var(--muted); font-size:12px; align-items:center}
+    .dot{width:10px; height:10px; border-radius:50%; display:inline-block; background:var(--accent)}
+    .peg-dot{background:var(--peg)}
+    .hist{background:linear-gradient(180deg,#0a1018,#0a0e14)}
+    footer{color:var(--muted); text-align:center; font-size:12px; margin-top:10px;}
+    .stat{display:grid; grid-template-columns: repeat(3,1fr); gap:8px; margin-top:8px}
+    .stat .item{background:#0f141e; border:1px solid #213048; padding:8px; border-radius:12px; text-align:center}
+    .item b{display:block; font-size:18px; color:#cfe6ff}
+    @media (max-width: 980px){.grid{grid-template-columns: 1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>高尔顿钉板 (Galton<br>Board)：正态分布如何“自<br>然”出现</h1>
+      <div class="controls">
+        <div class="ctrl"><label>行数（层）</label><input id="rows" type="range" min="6" max="18" step="1" value="12"><span id="rowsVal">12</span></div>
+        <div class="ctrl"><label>发射速率</label><input id="rate" type="range" min="1" max="80" step="1" value="35"><span id="rateVal">35/s</span></div>
+        <div class="ctrl"><label>速度</label><input id="speed" type="range" min="0.2" max="2.0" step="0.1" value="1"><span id="speedVal">1.0×</span></div>
+        <div class="ctrl"><label>向右概率 p</label><input id="prob" type="range" min="0" max="1" step="0.01" value="0.5"><span id="probVal">0.50</span></div>
+        <div class="ctrl"><label>小球总数</label><input id="limit" type="range" min="100" max="6000" step="50" value="1500"><span id="limitVal">1500</span></div>
+        <div class="btn-group">
+          <button id="start" class="primary">开始</button>
+          <button id="pause">暂停</button>
+          <button id="reset" class="success">重置</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <h2>钉板</h2>
+        <div class="legend"><span class="dot peg-dot"></span> 钉子 <span class="dot" style="margin-left:8px"></span> 小球</div>
+        <canvas id="board" width="800" height="640" aria-label="Galton board canvas"></canvas>
+        <div class="stat" id="stats">
+          <div class="item"><small>已落地</small><b id="count">0</b></div>
+          <div class="item"><small>均值（步数）</small><b id="mean">0</b></div>
+          <div class="item"><small>方差（步数²）</small><b id="variance">0</b></div>
+        </div>
+      </section>
+      <section class="card">
+        <h2>直方图（底部小球计数）</h2>
+        <canvas id="hist" class="hist" width="420" height="280" aria-label="Histogram"></canvas>
+      </section>
+    </div>
+    <footer>
+      小球每经过一行在钉子处按概率向左/右偏转，底部累计的分布趋近于二项分布 B(n, p)，当 n 较大且 p≈0.5 时近似正态分布。
+    </footer>
+  </div>
+
+<script>
+(function(){
+  const board = document.getElementById('board');
+  const hist = document.getElementById('hist');
+  const ctx = board.getContext('2d');
+  const hctx = hist.getContext('2d');
+
+  // UI
+  const rowsEl = document.getElementById('rows');
+  const rateEl = document.getElementById('rate');
+  const speedEl = document.getElementById('speed');
+  const probEl = document.getElementById('prob');
+  const limitEl = document.getElementById('limit');
+  const rowsVal = document.getElementById('rowsVal');
+  const rateVal = document.getElementById('rateVal');
+  const speedVal = document.getElementById('speedVal');
+  const probVal = document.getElementById('probVal');
+  const limitVal = document.getElementById('limitVal');
+  const startBtn = document.getElementById('start');
+  const pauseBtn = document.getElementById('pause');
+  const resetBtn = document.getElementById('reset');
+  const countEl = document.getElementById('count');
+  const meanEl = document.getElementById('mean');
+  const varEl = document.getElementById('variance');
+
+  function fmt(n){return n.toLocaleString('zh-CN')}
+
+  // Simulation parameters
+  let ROWS = +rowsEl.value;       // peg rows
+  let PROB = +probEl.value;       // probability go right
+  let EMIT_RATE = +rateEl.value;  // balls per second
+  let SPEED = +speedEl.value;     // animation speed
+  let LIMIT = +limitEl.value;     // total balls emitted
+
+  const pegs = [];        // [{x,y}]
+  const balls = [];       // active flying balls
+  let bins = new Array(ROWS+1).fill(0);
+  let emitted = 0, landed = 0;
+  let lastEmit = 0, running = false, raf = null;
+
+  // geometry
+  const margin = {t: 80, r: 60, b: 120, l: 60};
+  const W = board.width, H = board.height;
+  const usableW = W - margin.l - margin.r;
+  const usableH = H - margin.t - margin.b;
+
+  function setupBoard(){
+    pegs.length = 0; balls.length = 0; bins = new Array(ROWS+1).fill(0);
+    emitted = 0; landed = 0; lastEmit = 0;
+    updateStats();
+
+    // Compute peg grid (triangular lattice)
+    const rowGap = usableH / (ROWS + 2);
+    const radiusPeg = Math.max(2, Math.min(6, rowGap*0.18));
+    const colBase = ROWS + 1; // widest row columns
+    const colGap = usableW / colBase;
+
+    for(let r=0; r<ROWS; r++){
+      const y = margin.t + rowGap*(r+1);
+      const cols = r+1;
+      for(let c=0; c<cols; c++){
+        const x = margin.l + colGap*(c + (colBase-cols)/2 + 0.5);
+        pegs.push({x,y,r:radiusPeg});
+      }
+    }
+
+    // Draw static elements once
+    drawBackground();
+    drawPegs();
+    drawBins();
+  }
+
+  function drawBackground(){
+    ctx.clearRect(0,0,W,H);
+
+    // frame lines
+    ctx.strokeStyle = '#22334a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(margin.l-28, margin.t-40, usableW+56, usableH+68, 14);
+    ctx.stroke();
+
+    // funnel
+    ctx.fillStyle = '#162235';
+    const fx = W/2, fy = margin.t-40, fw = Math.min(usableW*0.55, 420), fh = 44;
+    ctx.beginPath();
+    ctx.moveTo(fx-fw/2, fy);
+    ctx.lineTo(fx-12, fy+fh);
+    ctx.lineTo(fx+12, fy+fh);
+    ctx.lineTo(fx+fw/2, fy);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawPegs(){
+    ctx.fillStyle = '#2a3a4e';
+    for(const p of pegs){
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawBins(){
+    // bin outlines at bottom
+    const bw = usableW / (ROWS+1);
+    const baseY = margin.t + usableH + 24;
+
+    ctx.strokeStyle = '#283a54'; ctx.lineWidth=1;
+    for(let i=0;i<=ROWS+1;i++){
+      const x = margin.l + bw*i;
+      ctx.beginPath();
+      ctx.moveTo(x, baseY-6);
+      ctx.lineTo(x, H - 16);
+      ctx.stroke();
+    }
+
+    // histogram bars (preview as zero)
+    renderHistogram();
+  }
+
+  function renderHistogram(){
+    // draw in side canvas for clarity & speed
+    const w = hist.width, h = hist.height;
+    hctx.clearRect(0,0,w,h);
+
+    // axes
+    hctx.strokeStyle = '#364c6b';
+    hctx.lineWidth = 1;
+    hctx.beginPath();
+    hctx.moveTo(32,h-26); hctx.lineTo(w-8,h-26); hctx.moveTo(32,16); hctx.lineTo(32,h-26);
+    hctx.stroke();
+
+    const max = Math.max(1, ...bins);
+    const barW = (w-48) / bins.length;
+    for(let i=0;i<bins.length;i++){
+      const v = bins[i];
+      const bh = (h-48) * (v / max);
+      const x = 34 + i*barW + 2;
+      const y = h-28 - bh;
+      hctx.fillStyle = '#66c2ff';
+      hctx.fillRect(x, y, barW-4, bh);
+    }
+
+    // title numbers
+    hctx.fillStyle = '#8fa3b8';
+    hctx.font = '12px system-ui, sans-serif';
+    hctx.fillText('频数', 6, 18);
+    hctx.fillText('落点（向右次数）', w/2 - 50, h-6);
+  }
+
+  class Ball{
+    constructor(){
+      // start from funnel center
+      this.r = 4.2; // radius
+      this.row = -1; // before first row
+      this.col = 0; // number of rights so far
+      this.x = W/2; this.y = margin.t - 20;
+      this.path = []; // tween targets between rows
+      this.speed = 180 * SPEED; // px per sec
+      this.dead = false;
+      this.updateTarget();
+    }
+    updateTarget(){
+      // compute next target (next peg + deflection)
+      const rowGap = usableH / (ROWS + 2);
+      const colBase = ROWS + 1;
+      const colGap = usableW / colBase;
+
+      if(this.row >= ROWS){
+        // falling to bin bottom
+        const bw = usableW / (ROWS+1);
+        const binIndex = this.col; // 0..ROWS
+        const targetX = margin.l + bw*(binIndex + 0.5);
+        const targetY = margin.t + usableH + 18;
+        this.tx = targetX; this.ty = targetY; return;
+      }
+
+      const nextRow = this.row + 1;
+      const cols = nextRow + 1;
+      const y = margin.t + rowGap*(nextRow+1);
+
+      let goRight = Math.random() < PROB;
+      if(goRight) this.col += 1; // record rights
+
+      const x = margin.l + colGap*(this.col + (colBase-cols)/2 + 0.5);
+
+      this.tx = x; this.ty = y;
+      this.row = nextRow;
+    }
+    step(dt){
+      const v = this.speed * SPEED;
+      const dx = this.tx - this.x, dy = this.ty - this.y;
+      const dist = Math.hypot(dx, dy);
+      if(dist < v*dt){
+        this.x = this.tx; this.y = this.ty;
+        if(this.row > ROWS){ // reached base
+          this.dead = true; return;
+        }
+        if(this.row === ROWS){
+          // one more step to base
+          this.row += 1;
+        }
+        this.updateTarget();
+      }else{
+        this.x += (dx/dist) * v * dt;
+        this.y += (dy/dist) * v * dt;
+      }
+    }
+    draw(){
+      ctx.fillStyle = '#66c2ff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function emitBalls(ts){
+    if(emitted >= LIMIT) return;
+    if(!lastEmit) lastEmit = ts;
+    const interval = 1000/EMIT_RATE;
+    while(ts - lastEmit >= interval && emitted < LIMIT){
+      balls.push(new Ball());
+      emitted++; lastEmit += interval;
+    }
+  }
+
+  function update(dt){
+    for(const b of balls){
+      b.step(dt);
+      if(b.dead){
+        const idx = Math.max(0, Math.min(ROWS, b.col));
+        bins[idx] += 1; landed += 1;
+      }
+    }
+    // remove landed balls
+    for(let i=balls.length-1;i>=0;i--) if(balls[i].dead) balls.splice(i,1);
+  }
+
+  function draw(){
+    drawBackground();
+    drawPegs();
+
+    // draw bins fill as small resting balls for flair
+    const bw = usableW / (ROWS+1);
+    const baseY = margin.t + usableH + 18;
+    for(let i=0;i<bins.length;i++){
+      const count = bins[i];
+      let x = margin.l + bw*(i+0.5), y = baseY;
+      // stack a few visible dots (capped for perf)
+      const visible = Math.min(24, Math.ceil(Math.sqrt(count)));
+      const r = 2.4, gap = 5.2;
+      for(let k=0;k<visible;k++){
+        ctx.beginPath(); ctx.fillStyle = '#5ab1ee';
+        ctx.arc(x + ((k%3)-1)*gap*0.55, y - Math.floor(k/3)*gap, r, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    for(const b of balls) b.draw();
+  }
+
+  function updateStats(){
+    countEl.textContent = fmt(landed);
+    if(landed>0){
+      // mean and variance of right-steps (i.e., landing bin index)
+      let s=0, s2=0;
+      for(let i=0;i<bins.length;i++){
+        const v=bins[i]; s += i*v; s2 += i*i*v;
+      }
+      const mean = s/landed;
+      const variance = s2/landed - mean*mean;
+      meanEl.textContent = mean.toFixed(2);
+      varEl.textContent = variance.toFixed(2);
+    }else{
+      meanEl.textContent = '0'; varEl.textContent='0';
+    }
+    renderHistogram();
+  }
+
+  function frame(ts){
+    if(!running){ raf = requestAnimationFrame(frame); return; }
+    emitBalls(ts);
+    const dt = Math.min(0.033, (frame.prev? (ts-frame.prev)/1000 : 0.016));
+    frame.prev = ts;
+    update(dt);
+    draw();
+    updateStats();
+    raf = requestAnimationFrame(frame);
+  }
+
+  // UI bindings
+  rowsEl.addEventListener('input', e=>{ROWS = +e.target.value; rowsVal.textContent = ROWS; setupBoard();});
+  rateEl.addEventListener('input', e=>{EMIT_RATE = +e.target.value; rateVal.textContent = EMIT_RATE + '/s';});
+  speedEl.addEventListener('input', e=>{SPEED = +e.target.value; speedVal.textContent = SPEED.toFixed(1)+'×';});
+  probEl.addEventListener('input', e=>{PROB = +e.target.value; probVal.textContent = PROB.toFixed(2);});
+  limitEl.addEventListener('input', e=>{LIMIT = +e.target.value; limitVal.textContent = LIMIT;});
+
+  startBtn.addEventListener('click', ()=>{running = true});
+  pauseBtn.addEventListener('click', ()=>{running = false});
+  resetBtn.addEventListener('click', ()=>{setupBoard()});
+
+  // boot
+  rowsVal.textContent = ROWS; rateVal.textContent = EMIT_RATE + '/s'; speedVal.textContent = SPEED.toFixed(1)+'×'; probVal.textContent=PROB.toFixed(2); limitVal.textContent=LIMIT;
+  setupBoard();
+  frame(0);
+})();
+</script>
+</body>
+</html>
